@@ -3,7 +3,9 @@ Frequently Asked Questions
 
 ### Is it possible to read code (or EEPROM) memory out of a chip?
 
-By design, this is not possible with STC's bootloader protocols. This is considered a security feature by STC. There is no known workaround at this time. See issue #7 for more details and discussion.
+By design, it is not possible to read back code flash memory with STC's bootloader protocols. This is considered a security feature by STC. There is no known workaround at this time. See issue #7 for more details and discussion.
+
+On some STC MCUs, you can erase code flash memory without erasing EEPROM. That means you can create a program to dump the EEPROM. stcgal does not have any native support to do that at this time.
 
 ### Which serial interfaces have been tested with stcgal?
 
@@ -30,7 +32,8 @@ There are a number of issues that can result in this symptom:
 
 * Electrical issues and wrong connections. Make sure that RX/TX, GND and VCC are connected correctly. If you do not use the autoreset feature, also make sure to connect power only after stcgal starts, as the bootloader is only invoked on power-on reset.
 * Parasitic powering through I/O pins. The MCU can be powered through I/O pins (such as RX/TX) even if VCC is not connected. In this case, the power-on reset logic does not work. See next question.
-* Serial interface incompatibilities. Some USB-based UARTs have bad compatibility with STC MCUs for various reasons. You can try to lower the handshake baudrate from the standard 2400 baud to 1200 baud with the option `-l 1200`, which works around these issues in some cases.
+* Serial interface compatibility issues with protocol autodetection (for instance with some fake FTDI USB UART chips). Try to explicitly provide the protocol variant with the option ```-P```.
+* Other serial interface incompatibilities. Some USB-based UARTs have bad compatibility with STC MCUs for various reasons. You can try to lower the handshake baudrate from the standard 2400 baud to 1200 baud with the option `-l 1200`, which works around these issues in some cases.
 
 ### How can I avoid parasitic powering?
 

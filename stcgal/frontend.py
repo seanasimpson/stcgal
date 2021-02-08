@@ -126,7 +126,7 @@ class StcGal:
                 print("WARNING: eeprom_image truncated!", file=sys.stderr)
                 eedata = eedata[0:ee_size]
             if len(bindata) < code_size:
-                bindata += bytes(code_size - len(bindata))
+                bindata += bytes([0xff] * (code_size - len(bindata)))
             elif len(bindata) > code_size:
                 print("WARNING: eeprom_image overlaps code_image!", file=sys.stderr)
                 bindata = bindata[0:code_size]
@@ -142,6 +142,15 @@ class StcGal:
         self.protocol.erase_flash(len(bindata), code_size)
         self.protocol.program_flash(bindata)
         self.protocol.program_options()
+        self.protocol.disconnect()
+
+    def erase_mcu(self):
+        """Erase MCU without programming"""
+
+        code_size = self.protocol.model.code
+
+        self.protocol.handshake()
+        self.protocol.erase_flash(code_size, code_size)
         self.protocol.disconnect()
 
     def run(self):
@@ -172,7 +181,8 @@ class StcGal:
         except (StcFramingException, StcProtocolException) as ex:
             sys.stdout.flush()
             print("Protocol error: %s" % ex, file=sys.stderr)
-            self.protocol.disconnect()
+            if not isinstance(self.protocol, StcAutoProtocol):
+                self.protocol.disconnect()
             return 1
         except serial.SerialException as ex:
             sys.stdout.flush()
@@ -190,8 +200,10 @@ class StcGal:
         try:
             if self.opts.code_image:
                 self.program_mcu()
-                return 0
-            self.protocol.disconnect()
+            elif self.opts.erase:
+                self.erase_mcu()
+            else:
+                self.protocol.disconnect()
             return 0
         except NameError as ex:
             sys.stdout.flush()
@@ -223,8 +235,10 @@ def cli():
     parser = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter,
                                      description="stcgal {} - an STC MCU ISP flash tool\n".format(stcgal.__version__) +
                                                  "(C) 2014-2018 Grigori Goronzy and others\nhttps://github.com/grigorig/stcgal")
-    parser.add_argument("code_image", help="code segment file to flash (BIN/HEX)", type=argparse.FileType("rb"), nargs='?')
+    exclusives = parser.add_mutually_exclusive_group()
+    exclusives.add_argument("code_image", help="code segment file to flash (BIN/HEX)", type=argparse.FileType("rb"), nargs='?')
     parser.add_argument("eeprom_image", help="eeprom segment file to flash (BIN/HEX)", type=argparse.FileType("rb"), nargs='?')
+    exclusives.add_argument("-e", "--erase", help="only erase flash memory", action="store_true")
     parser.add_argument("-a", "--autoreset", help="cycle power automatically by asserting DTR", action="store_true")
     parser.add_argument("-r", "--resetcmd",  help="shell command for board power-cycling (instead of DTR assertion)", action="store")
     parser.add_argument("-P", "--protocol", help="protocol version (default: auto)",

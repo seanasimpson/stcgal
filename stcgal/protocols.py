@@ -198,8 +198,8 @@ class StcBaseProtocol(ABC):
                 raise serial.SerialTimeoutException("pulse timeout")
             self.ser.write(character)
             self.ser.flush()
-            time.sleep(0.015)
-            duration += 0.015
+            time.sleep(0.030)
+            duration += 0.030
             if self.ser.inWaiting() > 0: break
 
     def initialize_model(self):
@@ -214,6 +214,8 @@ class StcBaseProtocol(ABC):
             print(msg, file=sys.stderr)
             self.model = MCUModelDatabase.MCUModel(name="UNKNOWN",
                 magic=self.mcu_magic, total=63488, code=63488, eeprom=0)
+        except ValueError as ex:
+            raise StcProtocolException(ex)
 
         # special case for duplicated mcu magic,
         #   0xf294 (STC15F104W, STC15F104E)
@@ -267,6 +269,7 @@ class StcBaseProtocol(ABC):
             self.ser.setDTR(True)
             time.sleep(0.5)
             self.ser.setDTR(False)
+            time.sleep(0.030)
             print("done")
         else:
             print("Cycling power via shell cmd: " + resetcmd)
@@ -520,7 +523,7 @@ class Stc89Protocol(StcBaseProtocol):
         packet += struct.pack(">H", brt)
         packet += bytes([0xff - (brt >> 8), brt_csum, delay, iap])
         self.write_packet(packet)
-        time.sleep(0.2)
+        time.sleep(0.1)
         self.ser.baudrate = self.baud_transfer
         response = self.read_packet()
         self.ser.baudrate = self.baud_handshake
@@ -534,7 +537,7 @@ class Stc89Protocol(StcBaseProtocol):
         packet += struct.pack(">H", brt)
         packet += bytes([0xff - (brt >> 8), brt_csum, delay])
         self.write_packet(packet)
-        time.sleep(0.2)
+        time.sleep(0.1)
         self.ser.baudrate = self.baud_transfer
         response = self.read_packet()
         if response[0] != 0x8e:
@@ -710,7 +713,7 @@ class Stc12AProtocol(Stc12AOptionsMixIn, Stc89Protocol):
         sys.stdout.flush()
         packet = bytes([0x8f, 0xc0, brt, 0x3f, brt_csum, delay, iap])
         self.write_packet(packet)
-        time.sleep(0.2)
+        time.sleep(0.1)
         self.ser.baudrate = self.baud_transfer
         response = self.read_packet()
         self.ser.baudrate = self.baud_handshake
@@ -722,7 +725,7 @@ class Stc12AProtocol(Stc12AOptionsMixIn, Stc89Protocol):
         sys.stdout.flush()
         packet = bytes([0x8e, 0xc0, brt, 0x3f, brt_csum, delay])
         self.write_packet(packet)
-        time.sleep(0.2)
+        time.sleep(0.1)
         self.ser.baudrate = self.baud_transfer
         response = self.read_packet()
         if response[0] != 0x8e:
@@ -910,7 +913,7 @@ class Stc12BaseProtocol(StcBaseProtocol):
         sys.stdout.flush()
         packet = bytes([0x8f, 0xc0, brt, 0x3f, brt_csum, delay, iap])
         self.write_packet(packet)
-        time.sleep(0.2)
+        time.sleep(0.1)
         self.ser.baudrate = self.baud_transfer
         response = self.read_packet()
         self.ser.baudrate = self.baud_handshake
@@ -922,7 +925,7 @@ class Stc12BaseProtocol(StcBaseProtocol):
         sys.stdout.flush()
         packet = bytes([0x8e, 0xc0, brt, 0x3f, brt_csum, delay])
         self.write_packet(packet)
-        time.sleep(0.2)
+        time.sleep(0.1)
         self.ser.baudrate = self.baud_transfer
         response = self.read_packet()
         if response[0] != 0x84:
@@ -1204,7 +1207,7 @@ class Stc15AProtocol(Stc12Protocol):
         packet += struct.pack(">B", 230400 // self.baud_transfer)
         packet += bytes([0xa1, 0x64, 0xb8, 0x00, iap_wait, 0x20, 0xff, 0x00])
         self.write_packet(packet)
-        time.sleep(0.2)
+        time.sleep(0.1)
         self.ser.baudrate = self.baud_transfer
         response = self.read_packet()
         if response[0] != 0x84:
@@ -1394,16 +1397,19 @@ class Stc15Protocol(Stc15AProtocol):
         # hardware UART. Only one family of models seems to lack a hardware
         # UART, and we can isolate those with a check on the magic.
         # This is a bit of a hack, but it works.
-        bauds = self.baud_transfer if (self.mcu_magic >> 8) == 0xf2 else self.baud_transfer * 4
-        packet += struct.pack(">H", int(65535 - program_speed / bauds))
-        packet += bytes(user_trim)
+        if (self.mcu_magic >> 8) == 0xf2:
+            packet += struct.pack(">H", int(65536 - program_speed / self.baud_transfer))
+            packet += struct.pack(">H", int(65536 - program_speed / 2 * 3 / self.baud_transfer))
+        else:
+            packet += struct.pack(">H", int(65536 - program_speed / (self.baud_transfer * 4)))
+            packet += bytes(reversed(user_trim))
         iap_wait = self.get_iap_delay(program_speed)
         packet += bytes([iap_wait])
         self.write_packet(packet)
         response = self.read_packet()
         if len(response) < 1 or response[0] != 0x01:
             raise StcProtocolException("incorrect magic in handshake packet")
-        time.sleep(0.2)
+        time.sleep(0.1)
         self.ser.baudrate = self.baud_transfer
 
     def switch_baud_ext(self):
@@ -1413,14 +1419,17 @@ class Stc15Protocol(Stc15AProtocol):
         sys.stdout.flush()
         packet = bytes([0x01])
         packet += bytes([self.freq_count_24, 0x40])
-        packet += struct.pack(">H", int(65535 - self.mcu_clock_hz / self.baud_transfer / 4))
+        bauds = int(65536 - self.mcu_clock_hz / self.baud_transfer / 4)
+        if bauds >= 65536:
+            raise StcProtocolException("baudrate adjustment failed")
+        packet += struct.pack(">H", bauds)
         iap_wait = self.get_iap_delay(self.mcu_clock_hz)
         packet += bytes([0x00, 0x00, iap_wait])
         self.write_packet(packet)
         response = self.read_packet()
         if len(response) < 1 or response[0] != 0x01:
             raise StcProtocolException("incorrect magic in handshake packet")
-        time.sleep(0.2)
+        time.sleep(0.1)
         self.ser.baudrate = self.baud_transfer
 
         # for switching back to RC, program factory values
@@ -1458,11 +1467,15 @@ class Stc15Protocol(Stc15AProtocol):
         Note that this protocol always seems to erase everything.
         """
 
-        # XXX: how does partial erase work?
-
         print("Erasing flash: ", end="")
         sys.stdout.flush()
-        packet = bytes([0x03, 0x00])
+        packet = bytes([0x03])
+        if erase_size <= flash_size:
+           # erase flash only
+           packet += bytes([0x00])
+        else:
+           # erase flash and eeprom
+           packet += bytes([0x01])
         if self.bsl_version >= 0x72:
             packet += bytes([0x00, 0x5a, 0xa5])
         self.write_packet(packet)
@@ -1664,7 +1677,7 @@ class Stc8Protocol(Stc15Protocol):
         sys.stdout.flush()
         packet = bytes([0x01, 0x00, 0x00])
         bauds = self.baud_transfer * 4
-        packet += struct.pack(">H", round(65535 - 24E6 / bauds))
+        packet += struct.pack(">H", round(65536 - 24E6 / bauds))
         packet += bytes([user_trim[1], user_trim[0]])
         iap_wait = self.get_iap_delay(24E6)
         packet += bytes([iap_wait])
